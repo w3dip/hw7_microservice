@@ -27,7 +27,7 @@ type ServerImpl struct {
 	host   string
 }
 
-func NewBizManager(ctx context.Context, acl map[string][]string) *ServerImpl {
+func NewManager(ctx context.Context, acl map[string][]string) *ServerImpl {
 	return &ServerImpl{
 		mu:  sync.RWMutex{},
 		ctx: ctx,
@@ -56,13 +56,13 @@ func (server *ServerImpl) mustEmbedUnimplementedBizServer() {
 //	acl map[string][]string
 //}
 
-func NewAdminManager(ctx context.Context, acl map[string][]string) *ServerImpl {
-	return &ServerImpl{
-		mu:  sync.RWMutex{},
-		ctx: ctx,
-		acl: acl,
-	}
-}
+//func NewAdminManager(ctx context.Context, acl map[string][]string) *ServerImpl {
+//	return &ServerImpl{
+//		mu:  sync.RWMutex{},
+//		ctx: ctx,
+//		acl: acl,
+//	}
+//}
 
 func (server *ServerImpl) Logging(nothing *Nothing, loggingServer Admin_LoggingServer) error {
 	ctx := loggingServer.Context()
@@ -108,8 +108,8 @@ func StartMyMicroservice(ctx context.Context, addr string, acl string) error {
 			grpc.StreamInterceptor(authStreamInterceptor),
 		)
 
-		RegisterBizServer(server, NewBizManager(ctx, acl))
-		RegisterAdminServer(server, NewAdminManager(ctx, acl))
+		RegisterBizServer(server, NewManager(ctx, acl))
+		RegisterAdminServer(server, NewManager(ctx, acl))
 		//defer wg.Done()
 
 		//fmt.Printf("starting server at %s", addr)

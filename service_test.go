@@ -180,7 +180,7 @@ func TestLogging(t *testing.T) {
 	conn := getGrpcConn(t)
 	defer conn.Close()
 
-	//biz := NewBizClient(conn)
+	biz := NewBizClient(conn)
 	adm := NewAdminClient(conn)
 
 	logStream1, err := adm.Logging(getConsumerCtx("logger"), &Nothing{})
@@ -244,27 +244,27 @@ func TestLogging(t *testing.T) {
 		}
 	}()
 
-	//biz.Check(getConsumerCtx("biz_user"), &Nothing{})
-	//time.Sleep(2 * time.Millisecond)
-	//
-	//biz.Check(getConsumerCtx("biz_admin"), &Nothing{})
-	//time.Sleep(2 * time.Millisecond)
-	//
-	//biz.Test(getConsumerCtx("biz_admin"), &Nothing{})
-	//time.Sleep(2 * time.Millisecond)
+	biz.Check(getConsumerCtx("biz_user"), &Nothing{})
+	time.Sleep(2 * time.Millisecond)
+
+	biz.Check(getConsumerCtx("biz_admin"), &Nothing{})
+	time.Sleep(2 * time.Millisecond)
+
+	biz.Test(getConsumerCtx("biz_admin"), &Nothing{})
+	time.Sleep(2 * time.Millisecond)
 
 	wg.Wait()
 
 	expectedLogData1 := []*Event{
 		{Consumer: "logger", Method: "/main.Admin/Logging"},
-		//{Consumer: "biz_user", Method: "/main.Biz/Check"},
-		//{Consumer: "biz_admin", Method: "/main.Biz/Check"},
-		//{Consumer: "biz_admin", Method: "/main.Biz/Test"},
+		{Consumer: "biz_user", Method: "/main.Biz/Check"},
+		{Consumer: "biz_admin", Method: "/main.Biz/Check"},
+		{Consumer: "biz_admin", Method: "/main.Biz/Test"},
 	}
 	expectedLogData2 := []*Event{
-		//{Consumer: "biz_user", Method: "/main.Biz/Check"},
-		//{Consumer: "biz_admin", Method: "/main.Biz/Check"},
-		//{Consumer: "biz_admin", Method: "/main.Biz/Test"},
+		{Consumer: "biz_user", Method: "/main.Biz/Check"},
+		{Consumer: "biz_admin", Method: "/main.Biz/Check"},
+		{Consumer: "biz_admin", Method: "/main.Biz/Test"},
 	}
 
 	if !reflect.DeepEqual(logData1, expectedLogData1) {
