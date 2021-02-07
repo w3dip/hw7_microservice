@@ -7,6 +7,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"log"
 	"net"
@@ -19,9 +20,11 @@ import (
 //}
 
 type ServerImpl struct {
-	mu  sync.RWMutex
-	ctx context.Context
-	acl map[string][]string
+	mu     sync.RWMutex
+	ctx    context.Context
+	acl    map[string][]string
+	method string
+	host   string
 }
 
 func NewBizManager(ctx context.Context, acl map[string][]string) *ServerImpl {
@@ -62,6 +65,18 @@ func NewAdminManager(ctx context.Context, acl map[string][]string) *ServerImpl {
 }
 
 func (server *ServerImpl) Logging(nothing *Nothing, loggingServer Admin_LoggingServer) error {
+	ctx := loggingServer.Context()
+	md, _ := metadata.FromIncomingContext(ctx)
+	consumer := md.Get("consumer")
+	if consumer == nil || len(consumer) == 0 {
+		return status.Errorf(codes.DataLoss, "can't find consumer in request")
+	}
+	//server.mu.Lock()
+	//defer server.mu.Unlock()
+	err := loggingServer.Send(&Event{Consumer: consumer[0], Method: server.method, Host: server.host})
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -166,6 +181,8 @@ func authStreamInterceptor(srv interface{},
 		//switch serverType := info.Server.(type) {
 		//case BizServerImpl:
 		//server := info.Server.(BizServerImpl)
+		server.mu.Lock()
+		defer server.mu.Unlock()
 		acl := server.acl
 		user := consumer[0]
 		fmt.Printf("Checking permissions for user %v\n", user)
@@ -175,6 +192,9 @@ func authStreamInterceptor(srv interface{},
 			for _, expr := range val {
 				if ok, _ := filepath.Match(expr, info.FullMethod); ok {
 					fmt.Printf("Rules for user %v found successfully\n", user)
+					server.method = info.FullMethod
+					p, _ := peer.FromContext(ctx)
+					server.host = p.Addr.String()
 					err := handler(srv, ss)
 					if err != nil {
 						return err
@@ -214,6 +234,8 @@ func authInterceptor(
 		//switch serverType := info.Server.(type) {
 		//case BizServerImpl:
 		//server := info.Server.(BizServerImpl)
+		server.mu.Lock()
+		defer server.mu.Unlock()
 		acl := server.acl
 		user := consumer[0]
 		fmt.Printf("Checking permissions for user %v\n", user)
@@ -223,6 +245,9 @@ func authInterceptor(
 			for _, expr := range val {
 				if ok, _ := filepath.Match(expr, info.FullMethod); ok {
 					fmt.Printf("Rules for user %v found successfully\n", user)
+					server.method = info.FullMethod
+					p, _ := peer.FromContext(ctx)
+					server.host = p.Addr.String()
 					return reply, err
 				}
 			}
