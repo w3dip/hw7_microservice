@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"google.golang.org/grpc/codes"
 	"log"
+	"runtime"
 	"testing"
 	"time"
 
@@ -76,89 +78,89 @@ func TestServerStartStop(t *testing.T) {
 // у вас наверняка будет что-то выполняться в отдельных горутинах
 // этим тестом мы проверяем что вы останавливаете все горутины которые у вас были и нет утечек
 // некоторый запас ( goroutinesPerTwoIterations*5 ) остаётся на случай рантайм горутин
-//func TestServerLeak(t *testing.T) {
-//	//return
-//	goroutinesStart := runtime.NumGoroutine()
-//	TestServerStartStop(t)
-//	goroutinesPerTwoIterations := runtime.NumGoroutine() - goroutinesStart
-//
-//	goroutinesStart = runtime.NumGoroutine()
-//	goroutinesStat := []int{}
-//	for i := 0; i <= 25; i++ {
-//		TestServerStartStop(t)
-//		goroutinesStat = append(goroutinesStat, runtime.NumGoroutine())
-//	}
-//	goroutinesPerFiftyIterations := runtime.NumGoroutine() - goroutinesStart
-//	if goroutinesPerFiftyIterations > goroutinesPerTwoIterations*5 {
-//		t.Fatalf("looks like you have goroutines leak: %+v", goroutinesStat)
-//	}
-//}
+func TestServerLeak(t *testing.T) {
+	//return
+	goroutinesStart := runtime.NumGoroutine()
+	TestServerStartStop(t)
+	goroutinesPerTwoIterations := runtime.NumGoroutine() - goroutinesStart
+
+	goroutinesStart = runtime.NumGoroutine()
+	goroutinesStat := []int{}
+	for i := 0; i <= 25; i++ {
+		TestServerStartStop(t)
+		goroutinesStat = append(goroutinesStat, runtime.NumGoroutine())
+	}
+	goroutinesPerFiftyIterations := runtime.NumGoroutine() - goroutinesStart
+	if goroutinesPerFiftyIterations > goroutinesPerTwoIterations*5 {
+		t.Fatalf("looks like you have goroutines leak: %+v", goroutinesStat)
+	}
+}
 
 // ACL (права на методы доступа) парсится корректно
-//func TestACLParseError(t *testing.T) {
-//	// finish'а тут нет потому что стартовать у вас ничего не должно если не получилось распаковать ACL
-//	err := StartMyMicroservice(context.Background(), listenAddr, "{.;")
-//	if err == nil {
-//		t.Fatalf("expacted error on bad acl json, have nil")
-//	}
-//}
+func TestACLParseError(t *testing.T) {
+	// finish'а тут нет потому что стартовать у вас ничего не должно если не получилось распаковать ACL
+	err := StartMyMicroservice(context.Background(), listenAddr, "{.;")
+	if err == nil {
+		t.Fatalf("expacted error on bad acl json, have nil")
+	}
+}
 
 // ACL (права на методы доступа) работает корректно
-//func TestACL(t *testing.T) {
-//	wait(1)
-//	ctx, finish := context.WithCancel(context.Background())
-//	err := StartMyMicroservice(ctx, listenAddr, ACLData)
-//	if err != nil {
-//		t.Fatalf("cant start server initial: %v", err)
-//	}
-//	wait(1)
-//	defer func() {
-//		finish()
-//		wait(1)
-//	}()
-//
-//	conn := getGrpcConn(t)
-//	defer conn.Close()
-//
-//	biz := NewBizClient(conn)
-//	adm := NewAdminClient(conn)
-//
-//	for idx, ctx := range []context.Context{
-//		context.Background(),       // нет поля для ACL
-//		getConsumerCtx("unknown"),  // поле есть, неизвестный консюмер
-//		getConsumerCtx("biz_user"), // поле есть, нет доступа
-//	} {
-//		_, err = biz.Test(ctx, &Nothing{})
-//		if err == nil {
-//			t.Fatalf("[%d] ACL fail: expected err on disallowed method", idx)
-//		} else if code := grpc.Code(err); code != codes.Unauthenticated {
-//			t.Fatalf("[%d] ACL fail: expected Unauthenticated code, got %v", idx, code)
-//		}
-//	}
-//
-//	// есть доступ
-//	_, err = biz.Check(getConsumerCtx("biz_user"), &Nothing{})
-//	if err != nil {
-//		t.Fatalf("ACL fail: unexpected error: %v", err)
-//	}
-//	_, err = biz.Check(getConsumerCtx("biz_admin"), &Nothing{})
-//	if err != nil {
-//		t.Fatalf("ACL fail: unexpected error: %v", err)
-//	}
-//	_, err = biz.Test(getConsumerCtx("biz_admin"), &Nothing{})
-//	if err != nil {
-//		t.Fatalf("ACL fail: unexpected error: %v", err)
-//	}
-//
-//	// ACL на методах, которые возвращают поток данных
-//	logger, err := adm.Logging(getConsumerCtx("unknown"), &Nothing{})
-//	_, err = logger.Recv()
-//	if err == nil {
-//		t.Fatalf("ACL fail: expected err on disallowed method")
-//	} else if code := grpc.Code(err); code != codes.Unauthenticated {
-//		t.Fatalf("ACL fail: expected Unauthenticated code, got %v", code)
-//	}
-//}
+func TestACL(t *testing.T) {
+	wait(1)
+	ctx, finish := context.WithCancel(context.Background())
+	err := StartMyMicroservice(ctx, listenAddr, ACLData)
+	if err != nil {
+		t.Fatalf("cant start server initial: %v", err)
+	}
+	wait(1)
+	defer func() {
+		finish()
+		wait(1)
+	}()
+
+	conn := getGrpcConn(t)
+	defer conn.Close()
+
+	biz := NewBizClient(conn)
+	adm := NewAdminClient(conn)
+
+	for idx, ctx := range []context.Context{
+		context.Background(),       // нет поля для ACL
+		getConsumerCtx("unknown"),  // поле есть, неизвестный консюмер
+		getConsumerCtx("biz_user"), // поле есть, нет доступа
+	} {
+		_, err = biz.Test(ctx, &Nothing{})
+		if err == nil {
+			t.Fatalf("[%d] ACL fail: expected err on disallowed method", idx)
+		} else if code := grpc.Code(err); code != codes.Unauthenticated {
+			t.Fatalf("[%d] ACL fail: expected Unauthenticated code, got %v", idx, code)
+		}
+	}
+
+	// есть доступ
+	_, err = biz.Check(getConsumerCtx("biz_user"), &Nothing{})
+	if err != nil {
+		t.Fatalf("ACL fail: unexpected error: %v", err)
+	}
+	_, err = biz.Check(getConsumerCtx("biz_admin"), &Nothing{})
+	if err != nil {
+		t.Fatalf("ACL fail: unexpected error: %v", err)
+	}
+	_, err = biz.Test(getConsumerCtx("biz_admin"), &Nothing{})
+	if err != nil {
+		t.Fatalf("ACL fail: unexpected error: %v", err)
+	}
+
+	// ACL на методах, которые возвращают поток данных
+	logger, err := adm.Logging(getConsumerCtx("unknown"), &Nothing{})
+	_, err = logger.Recv()
+	if err == nil {
+		t.Fatalf("ACL fail: expected err on disallowed method")
+	} else if code := grpc.Code(err); code != codes.Unauthenticated {
+		t.Fatalf("ACL fail: expected Unauthenticated code, got %v", code)
+	}
+}
 
 //func TestLogging(t *testing.T) {
 //	ctx, finish := context.WithCancel(context.Background())
