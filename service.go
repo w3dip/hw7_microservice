@@ -13,6 +13,7 @@ import (
 	"net"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 //type ACL struct {
@@ -20,18 +21,31 @@ import (
 //}
 
 type ServerImpl struct {
-	mu     sync.RWMutex
-	ctx    context.Context
-	acl    map[string][]string
-	method string
-	host   string
+	mu  sync.RWMutex
+	ctx context.Context
+	acl map[string][]string
+
+	loggers      []chan *Event
+	createLogger chan chan *Event
+	streamLogger chan *Event
+
+	statistics      []chan *Stat
+	createStatistic chan chan *Stat
+	streamStatistic chan *Stat
+	//method string
+	//host   string
+	//stat   *Stat
 }
 
 func NewManager(ctx context.Context, acl map[string][]string) *ServerImpl {
 	return &ServerImpl{
-		mu:  sync.RWMutex{},
-		ctx: ctx,
-		acl: acl,
+		mu:              sync.RWMutex{},
+		ctx:             ctx,
+		acl:             acl,
+		streamLogger:    make(chan *Event, 0),
+		createLogger:    make(chan chan *Event, 0),
+		streamStatistic: make(chan *Stat, 0),
+		createStatistic: make(chan chan *Stat, 0),
 	}
 }
 
@@ -65,23 +79,90 @@ func (server *ServerImpl) mustEmbedUnimplementedBizServer() {
 //}
 
 func (server *ServerImpl) Logging(nothing *Nothing, loggingServer Admin_LoggingServer) error {
-	ctx := loggingServer.Context()
-	md, _ := metadata.FromIncomingContext(ctx)
-	consumer := md.Get("consumer")
-	if consumer == nil || len(consumer) == 0 {
-		return status.Errorf(codes.DataLoss, "can't find consumer in request")
+	//ctx := loggingServer.Context()
+	//md, _ := metadata.FromIncomingContext(ctx)
+	//consumer := md.Get("consumer")
+	//if consumer == nil || len(consumer) == 0 {
+	//	return status.Errorf(codes.DataLoss, "can't find consumer in request")
+	//}
+	////server.mu.Lock()
+	////defer server.mu.Unlock()
+	//err := loggingServer.Send(&Event{Consumer: consumer[0], Method: server.method, Host: server.host})
+	//if err != nil {
+	//	return err
+	//}
+	ch := make(chan *Event, 0)
+	server.createLogger <- ch
+
+	for {
+		select {
+		case event := <-ch:
+			loggingServer.Send(event)
+		case <-server.ctx.Done():
+			return nil
+		}
 	}
-	//server.mu.Lock()
-	//defer server.mu.Unlock()
-	err := loggingServer.Send(&Event{Consumer: consumer[0], Method: server.method, Host: server.host})
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (server *ServerImpl) Statistics(statInterval *StatInterval, statisticsServer Admin_StatisticsServer) error {
-	return nil
+	//ctx := statisticsServer.Context()
+	//go func(ctx context.Context, statInterval *StatInterval, statisticsServer Admin_StatisticsServer, ) {
+	//
+	//}(ctx, statInterval, statisticsServer)
+	//interval := int64(statInterval.IntervalSeconds) * time.Second.Milliseconds()
+	//ticker := time.Tick(2 * time.Second)
+	//for _ = range ticker {
+	//	//server.mu.Lock()
+	//	//fmt.Printf("Current stat %v\n", server.stat)
+	//	//err := statisticsServer.Send(server.stat)
+	//	stat := &Stat{
+	//		ByMethod: map[string]uint64{
+	//			"/main.Biz/Check":        1,
+	//			"/main.Biz/Add":          1,
+	//			"/main.Biz/Test":         1,
+	//			"/main.Admin/Statistics": 1,
+	//		},
+	//		ByConsumer: map[string]uint64{
+	//			"biz_user":  2,
+	//			"biz_admin": 1,
+	//			"stat":      1,
+	//		},
+	//	}
+	//	err := statisticsServer.Send(stat)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	//server.mu.Unlock()
+	//}
+	ch := make(chan *Stat, 0)
+	server.createStatistic <- ch
+
+	ticker := time.NewTicker(time.Second * time.Duration(statInterval.IntervalSeconds))
+	sum := &Stat{
+		ByMethod:   make(map[string]uint64),
+		ByConsumer: make(map[string]uint64),
+	}
+	for {
+		select {
+		case <-ticker.C:
+			statisticsServer.Send(sum)
+			sum = &Stat{
+				ByMethod:   make(map[string]uint64),
+				ByConsumer: make(map[string]uint64),
+			}
+		case stat := <-ch:
+			for k, v := range stat.ByMethod {
+				sum.ByMethod[k] += v
+			}
+			for k, v := range stat.ByConsumer {
+				sum.ByConsumer[k] += v
+			}
+
+		case <-server.ctx.Done():
+			return nil
+		}
+	}
+	//return nil
 }
 
 func (server *ServerImpl) mustEmbedUnimplementedAdminServer() {
@@ -108,8 +189,9 @@ func StartMyMicroservice(ctx context.Context, addr string, acl string) error {
 			grpc.StreamInterceptor(authStreamInterceptor),
 		)
 
-		RegisterBizServer(server, NewManager(ctx, acl))
-		RegisterAdminServer(server, NewManager(ctx, acl))
+		manager := NewManager(ctx, acl)
+		RegisterBizServer(server, manager)
+		RegisterAdminServer(server, manager)
 		//defer wg.Done()
 
 		//fmt.Printf("starting server at %s", addr)
@@ -119,6 +201,37 @@ func StartMyMicroservice(ctx context.Context, addr string, acl string) error {
 		//	log.Fatalln("cant start server", err)
 		//}
 		fmt.Println("Server is running")
+
+		go func() {
+			for {
+				select {
+				case ch := <-manager.createLogger:
+					manager.loggers = append(manager.loggers, ch)
+				case event := <-manager.streamLogger:
+					for _, ch := range manager.loggers {
+						ch <- event
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
+		go func() {
+			for {
+				select {
+				case ch := <-manager.createStatistic:
+					manager.statistics = append(manager.statistics, ch)
+				case stat := <-manager.streamStatistic:
+					for _, ch := range manager.statistics {
+						ch <- stat
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -181,20 +294,30 @@ func authStreamInterceptor(srv interface{},
 		//switch serverType := info.Server.(type) {
 		//case BizServerImpl:
 		//server := info.Server.(BizServerImpl)
-		server.mu.Lock()
-		defer server.mu.Unlock()
+		//server.mu.Lock()
+		//defer server.mu.Unlock()
 		acl := server.acl
 		user := consumer[0]
+		method := info.FullMethod
 		fmt.Printf("Checking permissions for user %v\n", user)
 		if val, ok := acl[user]; ok {
 			fmt.Printf("Found rules %v\n", val)
-			fmt.Printf("Request method %v\n", info.FullMethod)
+			fmt.Printf("Request method %v\n", method)
 			for _, expr := range val {
-				if ok, _ := filepath.Match(expr, info.FullMethod); ok {
+				if ok, _ := filepath.Match(expr, method); ok {
 					fmt.Printf("Rules for user %v found successfully\n", user)
-					server.method = info.FullMethod
 					p, _ := peer.FromContext(ctx)
-					server.host = p.Addr.String()
+					host := p.Addr.String()
+					server.streamStatistic <- &Stat{
+						ByConsumer: map[string]uint64{user: 1},
+						ByMethod:   map[string]uint64{method: 1},
+					}
+
+					server.streamLogger <- &Event{
+						Consumer: user,
+						Method:   method,
+						Host:     host,
+					}
 					err := handler(srv, ss)
 					if err != nil {
 						return err
@@ -234,20 +357,33 @@ func authInterceptor(
 		//switch serverType := info.Server.(type) {
 		//case BizServerImpl:
 		//server := info.Server.(BizServerImpl)
-		server.mu.Lock()
-		defer server.mu.Unlock()
+		//server.mu.Lock()
+		//defer server.mu.Unlock()
 		acl := server.acl
 		user := consumer[0]
+		method := info.FullMethod
 		fmt.Printf("Checking permissions for user %v\n", user)
 		if val, ok := acl[user]; ok {
 			fmt.Printf("Found rules %v\n", val)
-			fmt.Printf("Request method %v\n", info.FullMethod)
+			fmt.Printf("Request method %v\n", method)
 			for _, expr := range val {
-				if ok, _ := filepath.Match(expr, info.FullMethod); ok {
+				if ok, _ := filepath.Match(expr, method); ok {
 					fmt.Printf("Rules for user %v found successfully\n", user)
-					server.method = info.FullMethod
 					p, _ := peer.FromContext(ctx)
-					server.host = p.Addr.String()
+					host := p.Addr.String()
+
+					//currentVal := server.stat.ByMethod[info.FullMethod]
+					//server.stat.ByMethod[info.FullMethod] = currentVal + 1
+					server.streamStatistic <- &Stat{
+						ByConsumer: map[string]uint64{user: 1},
+						ByMethod:   map[string]uint64{method: 1},
+					}
+
+					server.streamLogger <- &Event{
+						Consumer: user,
+						Method:   method,
+						Host:     host,
+					}
 					return reply, err
 				}
 			}
